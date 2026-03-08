@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dual Snake</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #1a1a2e;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            font-family: 'Courier New', monospace;
+            color: #eee;
+        }
+        h1 {
+            margin-bottom: 10px;
+            font-size: 2rem;
+            text-shadow: 0 0 10px #4ecca3;
+        }
+        .info {
+            margin-bottom: 15px;
+            text-align: center;
+            font-size: 0.9rem;
+            color: #aaa;
+        }
+        .game-container {
+            display: flex;
+            gap: 4px;
+            background: #16213e;
+            padding: 4px;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(78, 204, 163, 0.3);
+        }
+        canvas {
+            background: #0f0f23;
+            border-radius: 4px;
+        }
+        .score-board {
+            margin-top: 15px;
+            display: flex;
+            gap: 40px;
+            font-size: 1.2rem;
+        }
+        .score-left { color: #4ecca3; }
+        .score-right { color: #ff6b6b; }
+        .controls {
+            margin-top: 10px;
+            font-size: 0.8rem;
+            color: #666;
+        }
+        .game-over {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.9);
+            padding: 30px 50px;
+            border-radius: 10px;
+            text-align: center;
+            display: none;
+        }
+        .game-over h2 {
+            color: #ff6b6b;
+            font-size: 2.5rem;
+            margin-bottom: 15px;
+        }
+        .game-over p {
+            color: #aaa;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🐍 DUAL SNAKE 🐍</h1>
+    <div class="info">Control BOTH snakes simultaneously!</div>
+    
+    <div class="game-container">
+        <canvas id="canvasLeft" width="300" height="400"></canvas>
+        <canvas id="canvasRight" width="300" height="400"></canvas>
+    </div>
+    
+    <div class="score-board">
+        <div class="score-left">Left: <span id="scoreLeft">0</span> (WASD)</div>
+        <div class="score-right">Right: <span id="scoreRight">0</span> (ARROWS)</div>
+    </div>
+    <div class="controls">Total Score: <span id="totalScore">0</span></div>
+    
+    <div class="game-over" id="gameOver">
+        <h2>GAME OVER</h2>
+        <p>Both snakes dead!</p>
+        <p>Press SPACE to restart</p>
+    </div>
+
+    <script>
+        // Game constants
+        const GRID_SIZE = 20;
+        const COLS = 15;  // 300 / 20
+        const ROWS = 20;  // 400 / 20
+        const BASE_SPEED = 150; // ms per move
+        const SPEED_INCREMENT = 0.90; // 10% faster every 3 food
+        
+        // Canvas setup
+        const canvasLeft = document.getElementById('canvasLeft');
+        const canvasRight = document.getElementById('canvasRight');
+        const ctxLeft = canvasLeft.getContext('2d');
+        const ctxRight = canvasRight.getContext('2d');
+        
+        // Game state
+        let gameRunning = true;
+        let totalFoodEaten = 0;
+        let lastMoveTime = 0;
+        
+        // Snake class
+        class Snake {
+            constructor(panel, startX, startY, color, controls) {
+                this.panel = panel; // 'left' or 'right'
+                this.ctx = panel === 'left' ? ctxLeft : ctxRight;
+                this.color = color;
+                this.controls = controls; // {up, down, left, right}
+                
+                this.reset(startX, startY);
+            }
+            
+            reset(x, y) {
+                this.body = [{x, y}];
+                this.direction = {x: 0, y: -1}; // Start moving up
+                this.nextDirection = {x: 0, y: -1};
+                this.alive = true;
+                this.foodEaten = 0;
+                this.pendingRespawn = false;
+            }
+            
+            changeDirection(newDir) {
+                // Prevent 180-degree turns
+                if (newDir.x !== -this.direction.x || newDir.y !== -this.direction.y) {
+                    this.nextDirection = newDir;
+                }
+            }
+            
+            move() {
+                if (!this.alive) return false;
+                
+                this.direction = this.nextDirection;
+                const head = {...this.body[0]};
+                head.x += this.direction.x;
+                head.y += this.direction.y;
+                
+                // Wall collision
+                if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS) {
+                    this.die();
+                    return false;
+                }
+                
+                // Self collision
+                if (this.body.some(seg => seg.x === head.x && seg.y === head.y)) {
+                    this.die();
+                    return false;
+                }
+                
+                this.body.unshift(head);
+                return true;
+            }
+            
+            grow() {
+                this.foodEaten++;
+                return true; // Don't remove tail = grow
+            }
+            
+            shrink() {
+                this.body.pop(); // Remove tail
+            }
+            
+            die() {
+                this.alive = false;
+                return this.body; // Return body segments to become food
+            }
+            
+            draw() {
+                // Draw body
+                this.body.forEach((seg, i) => {
+                    this.ctx.fillStyle = i === 0 ? this.color : this.shadeColor(this.color, -20);
+                    this.ctx.fillRect(seg.x * GRID_SIZE + 1, seg.y * GRID_SIZE + 1, GRID_SIZE - 2, GRID_SIZE - 2);
+                    
+                    // Eyes on head
+                    if (i === 0) {
+                        this.ctx.fillStyle = '#fff';
+                        this.ctx.fillRect(seg.x * GRID_SIZE + 5, seg.y * GRID_SIZE + 5, 4, 4);
+                        this.ctx.fillRect(seg.x * GRID_SIZE + 11, seg.y * GRID_SIZE + 5, 4, 4);
+                    }
+                });
+            }
+            
+            shadeColor(color, percent) {
+                const num = parseInt(color.replace('#', ''), 16);
+                const amt = Math.round(2.55 * percent);
+                const R = (num >> 16) + amt;
+                const G = (num >> 8 & 0x00FF) + amt;
+                const B = (num & 0x0000FF) + amt;
+                return '#' + (0x1000000 + (R < 255 ? R < 1 ? 0 : R : 255) * 0x10000 +
+                    (G < 255 ? G < 1 ? 0 : G : 255) * 0x100 +
+                    (B < 255 ? B < 1 ? 0 : B : 255))
+                    .toString(16).slice(1);
+            }
+        }
+        
+        // Initialize snakes
+        const snakeLeft = new Snake('left', 7, 15, '#4ecca3', {up: 'w', down: 's', left: 'a', right: 'd'});
+        const snakeRight = new Snake('right', 7, 15, '#ff6b6b', {up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight'});
+        
+        // Food arrays for each panel
+        let foodsLeft = [];
+        let foodsRight = [];
+        
+        // Spawn food on specific panel
+        function spawnFood(panel, avoidSnakes = []) {
+            const foods = panel === 'left' ? foodsLeft : foodsRight;
+            const snakes = panel === 'left' ? [snakeLeft, snakeRight] : [snakeRight, snakeLeft];
+            
+            let attempts = 0;
+            while (attempts < 100) {
+                const pos = {
+                    x: Math.floor(Math.random() * COLS),
+                    y: Math.floor(Math.random() * ROWS)
+                };
+                
+                // Check collision with all snakes on this panel
+                let collision = false;
+                for (const snake of avoidSnakes.length > 0 ? avoidSnakes : snakes) {
+                    if (snake.alive && snake.body.some(seg => seg.x === pos.x && seg.y === pos.y)) {
+                        collision = true;
+                        break;
+                    }
+                }
+                
+                // Check collision with existing food
+                if (!collision && !foods.some(f => f.x === pos.x && f.y === pos.y)) {
+                    foods.push(pos);
+                    return pos;
+                }
+                attempts++;
+            }
+            return null;
+        }
+        
+        // Scatter dead snake as food
+        function scatterFood(body, sourcePanel) {
+            // Scatter on both panels
+            const segmentsToScatter = Math.min(body.length, 5); // Max 5 segments
+            const scattered = [];
+            
+            for (let i = 0; i < segmentsToScatter; i++) {
+                const seg = body[Math.floor(Math.random() * body.length)];
+                if (!scattered.some(s => s.x === seg.x && s.y === seg.y)) {
+                    scattered.push({...seg});
+                }
+            }
+            
+            // Add scattered food to both panels
+            scattered.forEach(seg => {
+                if (!foodsLeft.some(f => f.x === seg.x && f.y === seg.y)) {
+                    foodsLeft.push({...seg});
+                }
+                if (!foodsRight.some(f => f.x === seg.x && f.y === seg.y)) {
+                    foodsRight.push({...seg});
+                }
+            });
+        }
+        
+        // Check food collision
+        function checkFoodCollision(snake) {
+            const foods = snake.panel === 'left' ? foodsLeft : foodsRight;
+            const head = snake.body[0];
+            
+            for (let i = foods.length - 1; i >= 0; i--) {
+                if (foods[i].x === head.x && foods[i].y === head.y) {
+                    foods.splice(i, 1);
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        // Respawn logic
+        function checkRespawn(eater, deadSnake) {
+            if (!deadSnake.alive && !deadSnake.pendingRespawn) {
+                if (eater.foodEaten >= 5) {
+                    // Respawn dead snake
+                    const panel = deadSnake.panel;
+                    const startX = Math.floor(COLS / 2);
+                    const startY = Math.floor(ROWS * 0.75);
+                    deadSnake.reset(startX, startY);
+                    eater.foodEaten = 0; // Reset counter
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        // Get current speed
+        function getSpeed() {
+            const aliveSnakes = [snakeLeft, snakeRight].filter(s => s.alive);
+            const totalLength = aliveSnakes.reduce((sum, s) => sum + s.body.length, 0);
+            const speedMultiplier = Math.pow(SPEED_INCREMENT, Math.floor(totalFoodEaten / 3)) * 
+                                   Math.pow(0.98, totalLength);
+            return Math.max(BASE_SPEED * speedMultiplier, 50); // Min 50ms
+        }
+        
+        // Clear canvases
+        function clear() {
+            ctxLeft.fillStyle = '#0f0f23';
+            ctxLeft.fillRect(0, 0, canvasLeft.width, canvasLeft.height);
+            
+            ctxRight.fillStyle = '#0f0f23';
+            ctxRight.fillRect(0, 0, canvasRight.width, canvasRight.height);
+            
+            // Draw grid lines (subtle)
+            ctxLeft.strokeStyle = '#1a1a3e';
+            ctxRight.strokeStyle = '#1a1a3e';
+            ctxLeft.lineWidth = 1;
+            ctxRight.lineWidth = 1;
+            
+            for (let x = 0; x <= COLS; x++) {
+                ctxLeft.beginPath(); ctxLeft.moveTo(x * GRID_SIZE, 0); ctxLeft.lineTo(x * GRID_SIZE, canvasLeft.height); ctxLeft.stroke();
+                ctxRight.beginPath(); ctxRight.moveTo(x * GRID_SIZE, 0); ctxRight.lineTo(x * GRID_SIZE, canvasRight.height); ctxRight.stroke();
+            }
+            for (let y = 0; y <= ROWS; y++) {
+                ctxLeft.beginPath(); ctxLeft.moveTo(0, y * GRID_SIZE); ctxLeft.lineTo(canvasLeft.width, y * GRID_SIZE); ctxLeft.stroke();
+                ctxRight.beginPath(); ctxRight.moveTo(0, y * GRID_SIZE); ctxRight.lineTo(canvasRight.width, y * GRID_SIZE); ctxRight.stroke();
+            }
+        }
+        
+        // Draw food
+        function drawFood() {
+            // Left panel food
+            ctxLeft.fillStyle = '#ffd93d';
+            foodsLeft.forEach(f => {
+                ctxLeft.beginPath();
+                ctxLeft.arc(f.x * GRID_SIZE + GRID_SIZE/2, f.y * GRID_SIZE + GRID_SIZE/2, 6, 0, Math.PI * 2);
+                ctxLeft.fill();
+            });
+            
+            // Right panel food
+            ctxRight.fillStyle = '#ffd93d';
+            foodsRight.forEach(f => {
+                ctxRight.beginPath();
+                ctxRight.arc(f.x * GRID_SIZE + GRID_SIZE/2, f.y * GRID_SIZE + GRID_SIZE/2, 6, 0, Math.PI * 2);
+                ctxRight.fill();
+            });
+        }
+        
+        // Update score display
+        function updateScore() {
+            document.getElementById('scoreLeft').textContent = snakeLeft.foodEaten;
+            document.getElementById('scoreRight').textContent = snakeRight.foodEaten;
+            document.getElementById('totalScore').textContent = totalFoodEaten;
+        }
+        
+        // Check game over
+        function checkGameOver() {
+            if (!snakeLeft.alive && !snakeRight.alive) {
+                gameRunning = false;
+                document.getElementById('gameOver').style.display = 'block';
+                return true;
+            }
+            return false;
+        }
+        
+        // Game loop
+        function gameLoop(timestamp) {
+            if (!gameRunning) return;
+            
+            const speed = getSpeed();
+            if (timestamp - lastMoveTime < speed) {
+                requestAnimationFrame(gameLoop);
+                return;
+            }
+            lastMoveTime = timestamp;
+            
+            // Move snakes
+            const movedLeft = snakeLeft.move();
+            const movedRight = snakeRight.move();
+            
+            // Check food collisions
+            let foodEatenThisFrame = false;
+            
+            if (snakeLeft.alive && checkFoodCollision(snakeLeft)) {
+                snakeLeft.grow();
+                foodEatenThisFrame = true;
+                totalFoodEaten++;
+                // Respawn regular food on left panel
+                spawnFood('left', [snakeLeft]);
+            } else if (snakeLeft.alive) {
+                snakeLeft.shrink();
+            }
+            
+            if (snakeRight.alive && checkFoodCollision(snakeRight)) {
+                snakeRight.grow();
+                foodEatenThisFrame = true;
+                totalFoodEaten++;
+                // Respawn regular food on right panel
+                spawnFood('right', [snakeRight]);
+            } else if (snakeRight.alive) {
+                snakeRight.shrink();
+            }
+            
+            // Check respawn conditions
+            if (snakeLeft.alive && !snakeRight.alive) {
+                checkRespawn(snakeLeft, snakeRight);
+            } else if (snakeRight.alive && !snakeLeft.alive) {
+                checkRespawn(snakeRight, snakeLeft);
+            }
+            
+            // Check for dead snakes to scatter food
+            if (!movedLeft && !snakeLeft.pendingRespawn) {
+                const body = snakeLeft.body;
+                scatterFood(body, 'left');
+                snakeLeft.pendingRespawn = true;
+            }
+            if (!movedRight && !snakeRight.pendingRespawn) {
+                const body = snakeRight.body;
+                scatterFood(body, 'right');
+                snakeRight.pendingRespawn = true;
+            }
+            
+            // Render
+            clear();
+            drawFood();
+            if (snakeLeft.alive) snakeLeft.draw();
+            if (snakeRight.alive) snakeRight.draw();
+            updateScore();
+            
+            // Check game over
+            if (checkGameOver()) return;
+            
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // Input handling
+        document.addEventListener('keydown', (e) => {
+            if (!gameRunning && e.code === 'Space') {
+                location.reload();
+                return;
+            }
+            
+            // Left snake (WASD)
+            switch(e.key.toLowerCase()) {
+                case 'w': snakeLeft.changeDirection({x: 0, y: -1}); break;
+                case 's': snakeLeft.changeDirection({x: 0, y: 1}); break;
+                case 'a': snakeLeft.changeDirection({x: -1, y: 0}); break;
+                case 'd': snakeLeft.changeDirection({x: 1, y: 0}); break;
+            }
+            
+            // Right snake (Arrow keys)
+            switch(e.key) {
+                case 'ArrowUp': snakeRight.changeDirection({x: 0, y: -1}); e.preventDefault(); break;
+                case 'ArrowDown': snakeRight.changeDirection({x: 0, y: 1}); e.preventDefault(); break;
+                case 'ArrowLeft': snakeRight.changeDirection({x: -1, y: 0}); e.preventDefault(); break;
+                case 'ArrowRight': snakeRight.changeDirection({x: 1, y: 0}); e.preventDefault(); break;
+            }
+        });
+        
+        // Initialize food
+        spawnFood('left');
+        spawnFood('right');
+        
+        // Start game
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
